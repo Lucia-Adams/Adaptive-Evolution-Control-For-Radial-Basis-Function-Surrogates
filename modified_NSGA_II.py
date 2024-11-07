@@ -19,16 +19,21 @@ from pymoo.util.dominator import Dominator
 from pymoo.problems import get_problem
 from pymoo.core.population import Population
 from pymoo.core.evaluator import Evaluator
-from pymoo.core.problem import Problem
 from pymoo.core.termination import NoTermination
 from pymoo.problems.static import StaticProblem
 
 from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 
 from scipy.interpolate import RBFInterpolator
+from scipy.spatial import distance
 
 import matplotlib.pyplot as plt
 import random
+
+POP_SIZE = 100
+SBX_ETA = 15
+SBX_PROB = 0.9
+N_GEN = 10
 
 def new_binary_tournament(pop, P, algorithm, **kwargs):
     n_tournaments, n_parents = P.shape
@@ -73,7 +78,6 @@ def new_binary_tournament(pop, P, algorithm, **kwargs):
     return S[:, None].astype(int, copy=False)
 
 
-
 problem = pymooProblem(RE21())
 static_problem = problem.get_basic_problem()
 n_objectives = problem.get_n_objectives()
@@ -81,58 +85,49 @@ n_variables = problem.get_n_variables()
 
 # Uses Latin Hyper Cube Sampling as in most papers
 # SBX crossover (can modify probability of crossover etc) and polynomial mutation as in Yu M
-algorithm = NSGA2(pop_size=100, 
+rbf_algorithm = NSGA2(pop_size=POP_SIZE, 
                 sampling=LHS(), 
                 selection=TournamentSelection(func_comp=new_binary_tournament),
-                crossover=SBX(eta=15, prob=0.9), 
+                crossover=SBX(eta=SBX_ETA, prob=SBX_PROB), 
                 mutation=PolynomialMutation(),
                 survival=RankAndCrowding())
 
-
 # prepare the algorithm to solve the specific problem (same arguments as for the minimize function)
-algorithm.setup(problem, termination=('n_gen', 20), seed=1, verbose=False)
+rbf_algorithm.setup(problem, termination=('n_gen', N_GEN), seed=1, verbose=False)
 
 # To store points/individuals that have used the actual fitness evaluation
 evaluated_archive = []
 rbf_models=[]
+err_plot = [0]
 
 plot = Scatter()
 
-# until the algorithm has no terminated - we have set to when gets to certain number of generations in algorithm setup tuple
-while algorithm.has_next():
+# Until the algorithm has no terminated - we have set to when gets to certain number of generations in algorithm setup tuple
+while rbf_algorithm.has_next():
 
-    # ask the algorithm for the next solution to be evaluated
+    # Asks the algorithm for the next solution to be evaluated
     # Returns the pymoo.core.population.Population class
-    pop = algorithm.ask()
+    pop = rbf_algorithm.ask()
     decision_space = pop.get("X") # numpy array of points dimension n_variables
 
-    if algorithm.n_gen ==1:
-        # Every point has its evaluation as an attribute so can store all info in one list
+    if rbf_algorithm.n_gen ==1:
         evaluated_archive.extend(pop)
 
         # Evaluate all individuals using the algorithm's evaluator (contains count of evaluations for termination)
-        algorithm.evaluator.eval(problem, pop, skip_already_evaluated=False)
-        objective_space = pop.get("F") # numpy array of points dimension n_objectives
+        rbf_algorithm.evaluator.eval(problem, pop, skip_already_evaluated=False)
+        objective_space = pop.get("F") # numpy array of points of dimension n_objectives
 
         # Train initial RBF model
         for i in range(n_objectives):
             target_values = objective_space[:, i] # all rows, objective i column
-
             # Can pass in number of neighbors...also consider epsilon especially per objective
-            obj_model = RBFInterpolator(decision_space, target_values, kernel='multiquadric', epsilon=0.5)
+            obj_model = RBFInterpolator(decision_space, target_values, kernel='multiquadric', epsilon=0.1)
             rbf_models.append(obj_model)
-        
-        # print(objective_space[0:3])
 
         # print(f"{n_objectives}\n{n_variables}\n{decision_space[0:3]}\n{objective_space[0:3]}")
 
     else:
-        # We wish to aproximate all the points, maybe in two ways, then depending
-        # on the error re-evaltuate with surrogate
-        
-        # List of all values in decision space of the population
-        # For all values in decision space but not in evalauted archive
-        # evaluate on rbf model
+        # Evaluate population on the rbf models
         model_evaluations = []
         for i in range(n_objectives):
             obj_model = rbf_models[i]
@@ -145,98 +140,89 @@ while algorithm.has_next():
         static = StaticProblem(problem.get_basic_problem(), F=model_F)
         Evaluator().eval(static, pop)
 
-        # Get say the top 3 points (maybe given a certain distance apart)
+        nds = NonDominatedSorting()
+        fronts = nds.do(pop.get("F")) # lists of front with each entry being the point index in model_F
+
+        # plot2 = Scatter()
+        # for i, front in enumerate(fronts):
+        #     plt.scatter(pop.get("F")[front, 0], pop.get("F")[front, 1])
+        # plt.show()
+
+        # Randomly choose points according to pareto front of predicted values
         # also choose depending on accuracy of predictions maybe - could look at neighbour influence
         sample_num_to_evaluate = 3
-
-        nds = NonDominatedSorting()
-        # fronts gives a lists of fronts with each entry being the point index in model_F
-        fronts = nds.do(model_F)
-
         try:
             new_archive_points_ind = random.sample(list(fronts[0]), sample_num_to_evaluate)
         except ValueError:
             print("Not enough front points")
 
-        # These points have been actually evaluated
         new_archive_points = Population([pop[i] for i in new_archive_points_ind])
-        # When get "F" here then empty as points not been evaluated yet
-        old_vals = new_archive_points.get("F")
-        algorithm.evaluator.eval(problem, new_archive_points, skip_already_evaluated=False)
-        new_vals = new_archive_points.get("F")
+        surrogate_vals = new_archive_points.get("F")
+        rbf_algorithm.evaluator.eval(problem, new_archive_points, skip_already_evaluated=False)
+        evaluated_archive.extend(list(new_archive_points))
+        function_vals = new_archive_points.get("F")
 
-        for ind in new_archive_points: 
-            if ind in pop: print(ind)
+        # Could work out distance between the predicted ones and actual ones to determine 
+        # next strategy management selection
+        distances = [distance.euclidean(surrogate_vals[i],function_vals[i]) for i in range(sample_num_to_evaluate)]
+        err_plot.append(sum(distances))
 
-        print(f"Model predicted: {old_vals}\n Actual value: {new_vals}")
+        # print(f"Model predicted: {surrogate_vals}\n Actual value: {function_vals}")
 
+        # --- Retrain model ---
+        archive_descision_space = Population(evaluated_archive).get("X")
+        archive_objective_space = Population(evaluated_archive).get("F")
+        for i in range(n_objectives):
+            target_values = archive_objective_space[:, i] # all rows, objective i column
+            # Can pass in number of neighbors...also consider epsilon especially per objective
+            obj_model = RBFInterpolator(archive_descision_space, target_values, kernel='multiquadric', epsilon=0.05)
+            rbf_models[i] = obj_model
+        # -----
 
-        # Retrain model
-
-
-        # take those points, evaluate with function and then retrain model
-
-        # plot2 = Scatter()
-        # for i, front in enumerate(fronts):
-        #     plt.scatter(model_F[front, 0], model_F[front, 1])
-        # plt.show()
-
-        # ie go through model evaluations and find which dominates
-
-        algorithm.evaluator.eval(problem, pop, skip_already_evaluated=False)
-
-        # plot.add(pop.get("F")) 
-
-
-        # I want the indivuals and I want an attribute of whether they have been
-        # evlauted with the real fitness or not
-        # Population is literally a list of indiduals
-
-        # print(model_F[0:3])
-        
-
-
-        # Take all values and get estimates from RBF model - have RBF model for each objective
-        # in a list
-
+    # TODO: Now re-evaluate objective space to get actual values it found and plot
+    # Ie will have line for predicted, line for actual obtained from model algorithm, one for without model 
+    # algorithm and actual pareto front
 
     # returned the evaluated individuals which have been evaluated or modified
-    algorithm.tell(infills=pop)
+    rbf_algorithm.tell(infills=pop)
 
-    # do same more things, printing, logging, storing or even modifying the algorithm object
-    # print(algorithm.n_gen, algorithm.evaluator.n_eval)
+    if not rbf_algorithm.has_next():
+        print("End:")
+        print(pop.get("F")[0:3])
+        rbf_algorithm.evaluator.eval(problem, pop, skip_already_evaluated=False)
+        print(pop.get("F")[0:3])
+    print(rbf_algorithm.n_gen, rbf_algorithm.evaluator.n_eval)
 
-# obtain the result objective from the algorithm
-res = algorithm.result()
+
+
+# obtain the result objective from the model algorithm
+rbf_res = rbf_algorithm.result()
+
+
+# Run again but all with actual evaluations
+control_algorithm = NSGA2(pop_size=POP_SIZE, 
+                sampling=LHS(), 
+                crossover=SBX(eta=SBX_ETA, prob=SBX_PROB), 
+                mutation=PolynomialMutation(),
+                survival=RankAndCrowding())
+
+
+# n_gen is termination tuple, seed is seeding random value
+control_res = minimize(problem,
+               control_algorithm,
+               ('n_gen', N_GEN),
+               seed=1,
+               verbose=False)
 
 # plot = Scatter()
 # alpha makes transparent
 plot.add(problem.pareto_front(), alpha=0.7, s=5)
 # makes transparent
-plot.add(res.F, facecolors='none', edgecolors='green') 
+plot.add(rbf_res.F, facecolors='none', edgecolors='green') 
+plot.add(control_res.F, facecolors='none', edgecolors='orange') 
 plot.show()
 
+plt.figure()
+plt.plot(range(0, len(err_plot)), err_plot)
+plt.show()
 
-
-
-"""
-Notes:
-
-F - Get the objective function vector for an individual.
-G - Get the inequality constraint vector for an individual.
-H - Get the equality constraint vector for an individual.
-
-
-# get the design space values of the algorithm
-    X = pop.get("X")
-
-    # implement your evluation. here ZDT1
-    f1 = X[:, 0]
-    v = 1 + 9.0 / (problem.n_var - 1) * np.sum(X[:, 1:], axis=1)
-    f2 = v * (1 - np.power((f1 / v), 0.5))
-    F = np.column_stack([f1, f2])
-
-    static = StaticProblem(problem, F=F)
-    Evaluator().eval(static, pop)
-
-"""
