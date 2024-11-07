@@ -122,7 +122,7 @@ while algorithm.has_next():
             obj_model = RBFInterpolator(decision_space, target_values, kernel='multiquadric', epsilon=0.5)
             rbf_models.append(obj_model)
         
-        print(objective_space[0:3])
+        # print(objective_space[0:3])
 
         # print(f"{n_objectives}\n{n_variables}\n{decision_space[0:3]}\n{objective_space[0:3]}")
 
@@ -139,11 +139,11 @@ while algorithm.has_next():
             # Could remove values in the archive but leave for now (gets all predicted values)
             evaluation = obj_model(decision_space) # returns ndarray of predicted objective values
             model_evaluations.append(evaluation)
-        model_F = np.column_stack(tuple(model_evaluations))
+        model_F = np.column_stack(model_evaluations)
 
-        # static = StaticProblem(problem, F=F)
-        # Evaluator().eval(static, pop)
-
+        # This gives the population their model predicted values
+        static = StaticProblem(problem.get_basic_problem(), F=model_F)
+        Evaluator().eval(static, pop)
 
         # Get say the top 3 points (maybe given a certain distance apart)
         # also choose depending on accuracy of predictions maybe - could look at neighbour influence
@@ -168,7 +168,7 @@ while algorithm.has_next():
         for ind in new_archive_points: 
             if ind in pop: print(ind)
 
-        print(f"{old_vals} {new_vals}")
+        print(f"Model predicted: {old_vals}\n Actual value: {new_vals}")
 
 
         # Retrain model

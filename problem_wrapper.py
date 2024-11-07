@@ -24,7 +24,7 @@ class pymooProblem(ElementwiseProblem):
 
     def get_basic_problem(self):
         '''returns basic problem version without predefined evaluation for adaption into static problem'''
-        return Problem(n_var=self.re_problem.n_variables, n_obj=self.re_problem.n_objectives, 
+        return Problem(n_var=self.re_problem.n_variables, n_obj=self.re_problem.n_objectives,
                         n_constr=0, xl=np.array(self.re_problem.lbound), xu=np.array(self.re_problem.ubound))
 
     def get_n_objectives(self):
