@@ -24,37 +24,35 @@ from scipy.spatial import distance
 
 import matplotlib.pyplot as plt
 import random
+import math
 
 
-def RBF_NSGA2(problem, base_rbf, generations, err_scalar=None, rand_seed=1):
+def RBF_NSGA2(problem, base_rbf, generations, err_scalar=None, const_sample=3, rand_seed=1, rbf_epsilon=0.05):
     """
     err_scalar (float): 0-1 scalar for model lenience. The higher the value the higher the model
                         accuracy at each stage
+    const_sample (int): Given the err_scalar is specified, is the number of points sampled when in 
+                        model acuracry bounds
     """
 
     n_objectives = problem.get_n_objectives()
-
-    # prepare the algorithm to solve the specific problem (same arguments as for the minimize function)
     base_rbf.setup(problem, termination=('n_gen', generations), seed=rand_seed, verbose=False)
-
-    # To store points/individuals that have used the actual fitness evaluation
+    pop_size = base_rbf.pop_size
     evaluated_archive = []
-    rbf_models=[]
+    rbf_models = []
     err_plot = [0]
     err_margin = 0
-    sample_num_to_evaluate = 3
+    sample_num_to_evaluate = 3 # start with 3 extra evaluations to get good initial error bound
+    neighbours = pop_size//3
 
-    # Until the algorithm has no terminated - we have set to when gets to certain number of generations in algorithm setup tuple
-    for n_gen in range(generations):
-
-        # Asks the algorithm for the next solution to be evaluated
-        # Returns the pymoo.core.population.Population class
-        pop = base_rbf.ask()
+    # Repeat algorithm for set number of generations
+    for n_gen in range(generations): 
+        pop = base_rbf.ask()  # Asks the algorithm for the next solution to be evaluated (Population class)
         decision_space = pop.get("X") # numpy array of points dimension n_variables
 
+        # --- First generation trains model ---
         if n_gen ==0:
             evaluated_archive.extend(pop)
-
             # Evaluate all individuals using the algorithm's evaluator (contains count of evaluations for termination)
             base_rbf.evaluator.eval(problem, pop, skip_already_evaluated=False)
             objective_space = pop.get("F") # numpy array of points of dimension n_objectives
@@ -62,12 +60,11 @@ def RBF_NSGA2(problem, base_rbf, generations, err_scalar=None, rand_seed=1):
             # Train initial RBF model
             for i in range(n_objectives):
                 target_values = objective_space[:, i] # all rows, objective i column
-                # Can pass in number of neighbors...also consider epsilon especially per objective
-                obj_model = RBFInterpolator(decision_space, target_values, kernel='multiquadric', epsilon=0.1)
+                obj_model = RBFInterpolator(decision_space, target_values, kernel='multiquadric', 
+                                            epsilon=rbf_epsilon, neighbors=neighbours)
                 rbf_models.append(obj_model)
 
-            # print(f"{n_objectives}\n{n_variables}\n{decision_space[0:3]}\n{objective_space[0:3]}")
-
+        # --- All other generations ---
         else:
             # Evaluate population on the rbf models
             model_evaluations = []
@@ -77,20 +74,25 @@ def RBF_NSGA2(problem, base_rbf, generations, err_scalar=None, rand_seed=1):
                 evaluation = obj_model(decision_space) # returns ndarray of predicted objective values
                 model_evaluations.append(evaluation)
             model_F = np.column_stack(model_evaluations)
-
             # This gives the population their model predicted values
             static = StaticProblem(problem.get_basic_problem(), F=model_F)
             Evaluator().eval(static, pop)
 
             nds = NonDominatedSorting()
             fronts = nds.do(pop.get("F")) # lists of front with each entry being the point index in model_F
-
-            # Randomly choose points according to pareto front of predicted values
-            # also choose depending on accuracy of predictions maybe - could look at neighbour influence
-            try:
-                new_archive_points_ind = random.sample(list(fronts[0]), sample_num_to_evaluate)
-            except ValueError:
-                print("Not enough front points")
+            # Randomly choose points according to pareto fronts of predicted values
+            # Future work: add diversity here instead of random like crowding distance
+            counter, fr = sample_num_to_evaluate, 0 # count how many points we have left to select and which front we are on
+            new_archive_points_ind = []
+            while counter > 0:
+                front_len = len(fronts[fr])
+                if counter <= front_len: # number of points left to sample are all in this front
+                    new_archive_points_ind.extend(random.sample(list(fronts[fr]), counter))
+                    break
+                else:
+                    new_archive_points_ind.extend(list(fronts[fr]))
+                    counter -= front_len
+                    fr +=1
 
             new_archive_points = Population([pop[i] for i in new_archive_points_ind])
             surrogate_vals = new_archive_points.get("F")
@@ -101,16 +103,20 @@ def RBF_NSGA2(problem, base_rbf, generations, err_scalar=None, rand_seed=1):
             # Could work out distance between the predicted ones and actual ones to determine 
             # next strategy management selection
             err_distances = [distance.euclidean(surrogate_vals[i],function_vals[i]) for i in range(sample_num_to_evaluate)]
-            avg_err_dist = sum(err_distances)/sample_num_to_evaluate
+            avg_err_dist = sum(err_distances)/len(err_distances)
             err_plot.append(avg_err_dist)
 
             # For this, all values in set have been evaluated so has lowest incremental error 
             if n_gen == 1 and err_scalar: err_margin = avg_err_dist/err_scalar
             # then if an err_scalar has been provided, adjust next sample points on error scale
+            elif err_scalar and avg_err_dist > err_margin:
+                extra_points = int(round((avg_err_dist-err_margin)*pop_size/avg_err_dist, 0))
+                print(f"Gen{n_gen}: {round(avg_err_dist,3)} is above {round(err_margin,3)}: {extra_points}")
+                sample_num_to_evaluate = extra_points
+                print(f"Sampling {sample_num_to_evaluate} points")
             elif err_scalar:
-                if avg_err_dist > err_margin:
-                    print(f"Gen{n_gen}: {avg_err_dist} is above {err_margin}")
-                    # get proportion of how far out and scale retraining for next round
+                sample_num_to_evaluate = const_sample
+            # Otherwise will take 3 samples each iteration
 
             # --- Retrain model ---
             archive_descision_space = Population(evaluated_archive).get("X")
@@ -118,11 +124,11 @@ def RBF_NSGA2(problem, base_rbf, generations, err_scalar=None, rand_seed=1):
             for i in range(n_objectives):
                 target_values = archive_objective_space[:, i] # all rows, objective i column
                 # Can pass in number of neighbors...also consider epsilon especially per objective
-                obj_model = RBFInterpolator(archive_descision_space, target_values, kernel='multiquadric', epsilon=0.05, neighbors=20)
+                obj_model = RBFInterpolator(archive_descision_space, target_values, kernel='multiquadric', 
+                                            epsilon=rbf_epsilon, neighbors=neighbours)
                 rbf_models[i] = obj_model
             # -----
 
-        # print(base_rbf.n_gen, base_rbf.evaluator.n_eval)
         base_rbf.tell(infills=pop)
 
     # obtain the result objective from the model algorithm
@@ -144,9 +150,9 @@ if __name__ == "__main__":
     POP_SIZE = 100
     SBX_ETA = 15
     SBX_PROB = 0.9
-    N_GEN = 20
+    N_GEN = 50
 
-    problem = pymooProblem(RE24())
+    problem = pymooProblem(RE31())
 
     # Uses Latin Hyper Cube Sampling as in most papers
     # SBX crossover (can modify probability of crossover etc) and polynomial mutation as in Yu M
@@ -157,7 +163,7 @@ if __name__ == "__main__":
                     survival=RankAndCrowding())
 
     
-    rbf_nsga2_F, evals, err_plot = RBF_NSGA2(problem, nsga2_base, N_GEN, err_scalar=0.2, rand_seed=1)
+    rbf_nsga2_F, evals, err_plot = RBF_NSGA2(problem, nsga2_base, N_GEN, rand_seed=2, err_scalar=0.02)
     print(evals)
 
     # Run again but all with actual evaluations
@@ -181,21 +187,10 @@ if __name__ == "__main__":
     # alpha makes transparent
     plot.add(problem.pareto_front(), alpha=0.7, s=5)
     # makes transparent
-    plot.add(rbf_nsga2_F, facecolors='none', edgecolors='green') 
     plot.add(control_res.F, facecolors='none', edgecolors='orange') 
+    plot.add(rbf_nsga2_F, color="green")   
     plot.show()
 
     plt.figure()
     plt.plot(range(0, len(err_plot)), err_plot)
     plt.show()
-
-
-# TODO: for error distance, maybe sample 3 points on the hypercube objective space, get distances to their nearest
-# neighbours, and then at least general average between different objective space points. At least gets the scale right
-
-# Hyper-parameter is epsilon and maybe soemthing to do with the rate ill set
-# work on spread bc its really bad
-
-# should be best near beginining so get distances between the accuracy then. set this as a benhcmark
-# and if worse then maybe sample next round of points biased to the worse one. if ok then don't need to 
-# do that extra re-evaluation
