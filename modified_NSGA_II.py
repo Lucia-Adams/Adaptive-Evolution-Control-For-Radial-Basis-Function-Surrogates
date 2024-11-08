@@ -103,15 +103,15 @@ def RBF_NSGA2(problem, base_rbf, generations, err_scalar=None, const_sample=3, r
             # Could work out distance between the predicted ones and actual ones to determine 
             # next strategy management selection
             err_distances = [distance.euclidean(surrogate_vals[i],function_vals[i]) for i in range(sample_num_to_evaluate)]
-            avg_err_dist = sum(err_distances)/len(err_distances)
-            err_plot.append(avg_err_dist)
+            log_avg_err_dist = math.log(sum(err_distances)/len(err_distances))
+            err_plot.append(log_avg_err_dist)
 
             # For this, all values in set have been evaluated so has lowest incremental error 
-            if n_gen == 1 and err_scalar: err_margin = avg_err_dist/err_scalar
+            if n_gen == 1 and err_scalar: err_margin = log_avg_err_dist/err_scalar
             # then if an err_scalar has been provided, adjust next sample points on error scale
-            elif err_scalar and avg_err_dist > err_margin:
-                extra_points = int(round((avg_err_dist-err_margin)*pop_size/avg_err_dist, 0))
-                print(f"Gen{n_gen}: {round(avg_err_dist,3)} is above {round(err_margin,3)}: {extra_points}")
+            elif err_scalar and log_avg_err_dist > err_margin:
+                extra_points = int(round((log_avg_err_dist-err_margin)*pop_size/log_avg_err_dist, 0))
+                print(f"Gen{n_gen}: {round(log_avg_err_dist,3)} is above {round(err_margin,3)}: {extra_points}")
                 sample_num_to_evaluate = extra_points
                 print(f"Sampling {sample_num_to_evaluate} points")
             elif err_scalar:
@@ -163,7 +163,7 @@ if __name__ == "__main__":
                     survival=RankAndCrowding())
 
     
-    rbf_nsga2_F, evals, err_plot = RBF_NSGA2(problem, nsga2_base, N_GEN, rand_seed=2, err_scalar=0.02)
+    rbf_nsga2_F, evals, err_plot = RBF_NSGA2(problem, nsga2_base, N_GEN, rand_seed=2, err_scalar=0.2)
     print(evals)
 
     # Run again but all with actual evaluations
