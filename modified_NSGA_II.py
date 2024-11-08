@@ -8,18 +8,13 @@ from pymoo.optimize import minimize
 from pymoo.visualization.scatter import Scatter
 
 from pymoo.operators.sampling.lhs import LHS
-from pymoo.operators.selection.tournament import TournamentSelection
 from pymoo.operators.crossover.sbx import SBX
 from pymoo.operators.mutation.pm import PolynomialMutation
 from pymoo.operators.survival.rank_and_crowding import RankAndCrowding
 
-from pymoo.operators.selection.tournament import compare, TournamentSelection
-from pymoo.util.dominator import Dominator
-
 from pymoo.problems import get_problem
 from pymoo.core.population import Population
 from pymoo.core.evaluator import Evaluator
-from pymoo.core.termination import NoTermination
 from pymoo.problems.static import StaticProblem
 
 from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
@@ -35,50 +30,7 @@ SBX_ETA = 15
 SBX_PROB = 0.9
 N_GEN = 10
 
-def new_binary_tournament(pop, P, algorithm, **kwargs):
-    n_tournaments, n_parents = P.shape
-
-    if n_parents != 2:
-        raise ValueError("Only implemented for binary tournament!")
-
-    tournament_type = algorithm.tournament_type
-    S = np.full(n_tournaments, np.nan)
-
-    for i in range(n_tournaments):
-
-        a, b = P[i, 0], P[i, 1]
-        a_cv, a_f, b_cv, b_f = pop[a].CV[0], pop[a].F, pop[b].CV[0], pop[b].F
-        rank_a, cd_a = pop[a].get("rank", "crowding")
-        rank_b, cd_b = pop[b].get("rank", "crowding")
-
-        # if at least one solution is infeasible
-        if a_cv > 0.0 or b_cv > 0.0:
-            S[i] = compare(a, a_cv, b, b_cv, method='smaller_is_better', return_random_if_equal=True)
-
-        # both solutions are feasible
-        else:
-
-            if tournament_type == 'comp_by_dom_and_crowding':
-                rel = Dominator.get_relation(a_f, b_f)
-                if rel == 1:
-                    S[i] = a
-                elif rel == -1:
-                    S[i] = b
-
-            elif tournament_type == 'comp_by_rank_and_crowding':
-                S[i] = compare(a, rank_a, b, rank_b, method='smaller_is_better')
-
-            else:
-                raise Exception("Unknown tournament type.")
-
-            # if rank or domination relation didn't make a decision compare by crowding
-            if np.isnan(S[i]):
-                S[i] = compare(a, cd_a, b, cd_b, method='larger_is_better', return_random_if_equal=True)
-
-    return S[:, None].astype(int, copy=False)
-
-
-problem = pymooProblem(RE21())
+problem = pymooProblem(RE24())
 static_problem = problem.get_basic_problem()
 n_objectives = problem.get_n_objectives()
 n_variables = problem.get_n_variables()
@@ -87,7 +39,6 @@ n_variables = problem.get_n_variables()
 # SBX crossover (can modify probability of crossover etc) and polynomial mutation as in Yu M
 rbf_algorithm = NSGA2(pop_size=POP_SIZE, 
                 sampling=LHS(), 
-                selection=TournamentSelection(func_comp=new_binary_tournament),
                 crossover=SBX(eta=SBX_ETA, prob=SBX_PROB), 
                 mutation=PolynomialMutation(),
                 survival=RankAndCrowding())
@@ -103,14 +54,14 @@ err_plot = [0]
 plot = Scatter()
 
 # Until the algorithm has no terminated - we have set to when gets to certain number of generations in algorithm setup tuple
-while rbf_algorithm.has_next():
+for n_gen in range(N_GEN):
 
     # Asks the algorithm for the next solution to be evaluated
     # Returns the pymoo.core.population.Population class
     pop = rbf_algorithm.ask()
     decision_space = pop.get("X") # numpy array of points dimension n_variables
 
-    if rbf_algorithm.n_gen ==1:
+    if n_gen ==0:
         evaluated_archive.extend(pop)
 
         # Evaluate all individuals using the algorithm's evaluator (contains count of evaluations for termination)
@@ -175,7 +126,7 @@ while rbf_algorithm.has_next():
         for i in range(n_objectives):
             target_values = archive_objective_space[:, i] # all rows, objective i column
             # Can pass in number of neighbors...also consider epsilon especially per objective
-            obj_model = RBFInterpolator(archive_descision_space, target_values, kernel='multiquadric', epsilon=0.05)
+            obj_model = RBFInterpolator(archive_descision_space, target_values, kernel='multiquadric', epsilon=0.05, neighbors=20)
             rbf_models[i] = obj_model
         # -----
 
@@ -183,21 +134,17 @@ while rbf_algorithm.has_next():
     # Ie will have line for predicted, line for actual obtained from model algorithm, one for without model 
     # algorithm and actual pareto front
 
+    print(rbf_algorithm.n_gen, rbf_algorithm.evaluator.n_eval)
     # returned the evaluated individuals which have been evaluated or modified
     rbf_algorithm.tell(infills=pop)
-
-    if not rbf_algorithm.has_next():
-        print("End:")
-        print(pop.get("F")[0:3])
-        rbf_algorithm.evaluator.eval(problem, pop, skip_already_evaluated=False)
-        print(pop.get("F")[0:3])
-    print(rbf_algorithm.n_gen, rbf_algorithm.evaluator.n_eval)
-
-
 
 # obtain the result objective from the model algorithm
 rbf_res = rbf_algorithm.result()
 
+# Get actual values from precited decision space
+rbf_result_X = rbf_res.X
+out = problem.evaluate(rbf_result_X, return_values_of=["F"], return_as_dictionary=True)
+rbf_result_F = out["F"]
 
 # Run again but all with actual evaluations
 control_algorithm = NSGA2(pop_size=POP_SIZE, 
@@ -218,7 +165,7 @@ control_res = minimize(problem,
 # alpha makes transparent
 plot.add(problem.pareto_front(), alpha=0.7, s=5)
 # makes transparent
-plot.add(rbf_res.F, facecolors='none', edgecolors='green') 
+plot.add(rbf_result_F, facecolors='none', edgecolors='green') 
 plot.add(control_res.F, facecolors='none', edgecolors='orange') 
 plot.show()
 
@@ -226,3 +173,13 @@ plt.figure()
 plt.plot(range(0, len(err_plot)), err_plot)
 plt.show()
 
+
+# TODO: for error distance, maybe sample 3 points on the hypercube objective space, get distances to their nearest
+# neighbours, and then at least general average between different objective space points. At least gets the scale right
+
+# Hyper-parameter is epsilon and maybe soemthing to do with the rate ill set
+# work on spread bc its really bad
+
+# should be best near beginining so get distances between the accuracy then. set this as a benhcmark
+# and if worse then maybe sample next round of points biased to the worse one. if ok then don't need to 
+# do that extra re-evaluation
