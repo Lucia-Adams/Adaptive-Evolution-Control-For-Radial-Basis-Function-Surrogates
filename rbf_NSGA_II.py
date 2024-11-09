@@ -97,9 +97,9 @@ def RBF_NSGA2(problem, base_rbf, generations, err_scalar=None, const_sample=3, r
             if n_gen == 1 and err_scalar: err_margin = log_avg_err_dist/err_scalar
             # then if an err_scalar has been provided, adjust next sample points on error scale
             elif err_scalar and log_avg_err_dist > err_margin:
-                extra_points = int(round((log_avg_err_dist-err_margin)*pop_size/log_avg_err_dist, 0))
+                extra_points = int(round((log_avg_err_dist-err_margin)*(pop_size-const_sample)/log_avg_err_dist, 0))
                 print(f"Gen{n_gen}: {round(log_avg_err_dist,3)} is above {round(err_margin,3)}: {extra_points}")
-                sample_num_to_evaluate = extra_points
+                sample_num_to_evaluate =const_sample + extra_points
             elif err_scalar:
                 sample_num_to_evaluate = const_sample
             # Otherwise will take 3 samples each iteration
