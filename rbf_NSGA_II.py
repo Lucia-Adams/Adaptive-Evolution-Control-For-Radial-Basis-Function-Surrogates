@@ -1,18 +1,6 @@
 import numpy as np
-from problem_wrapper import pymooProblem
-from reproblem import *
 
 # pymoo imports
-from pymoo.algorithms.moo.nsga2 import NSGA2
-from pymoo.optimize import minimize
-from pymoo.visualization.scatter import Scatter
-
-from pymoo.operators.sampling.lhs import LHS
-from pymoo.operators.crossover.sbx import SBX
-from pymoo.operators.mutation.pm import PolynomialMutation
-from pymoo.operators.survival.rank_and_crowding import RankAndCrowding
-
-from pymoo.problems import get_problem
 from pymoo.core.population import Population
 from pymoo.core.evaluator import Evaluator
 from pymoo.problems.static import StaticProblem
@@ -22,12 +10,11 @@ from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 from scipy.interpolate import RBFInterpolator
 from scipy.spatial import distance
 
-import matplotlib.pyplot as plt
 import random
 import math
 
 
-def RBF_NSGA2(problem, base_rbf, generations, err_scalar=None, const_sample=3, rand_seed=1, rbf_epsilon=0.05):
+def RBF_NSGA2(problem, base_rbf, generations, err_scalar=None, const_sample=3, rand_seed=1, nbh_scale=3, rbf_epsilon=0.05):
     """
     err_scalar (float): 0-1 scalar for model lenience. The higher the value the higher the model
                         accuracy at each stage
@@ -43,7 +30,7 @@ def RBF_NSGA2(problem, base_rbf, generations, err_scalar=None, const_sample=3, r
     err_plot = [0]
     err_margin = 0
     sample_num_to_evaluate = 3 # start with 3 extra evaluations to get good initial error bound
-    neighbours = pop_size//3
+    neighbours = pop_size//nbh_scale
 
     # Repeat algorithm for set number of generations
     for n_gen in range(generations): 
@@ -103,7 +90,7 @@ def RBF_NSGA2(problem, base_rbf, generations, err_scalar=None, const_sample=3, r
             # Could work out distance between the predicted ones and actual ones to determine 
             # next strategy management selection
             err_distances = [distance.euclidean(surrogate_vals[i],function_vals[i]) for i in range(sample_num_to_evaluate)]
-            log_avg_err_dist = math.log(sum(err_distances)/len(err_distances))
+            log_avg_err_dist = math.log((sum(err_distances)/len(err_distances)+1))
             err_plot.append(log_avg_err_dist)
 
             # For this, all values in set have been evaluated so has lowest incremental error 
@@ -113,20 +100,20 @@ def RBF_NSGA2(problem, base_rbf, generations, err_scalar=None, const_sample=3, r
                 extra_points = int(round((log_avg_err_dist-err_margin)*pop_size/log_avg_err_dist, 0))
                 print(f"Gen{n_gen}: {round(log_avg_err_dist,3)} is above {round(err_margin,3)}: {extra_points}")
                 sample_num_to_evaluate = extra_points
-                print(f"Sampling {sample_num_to_evaluate} points")
             elif err_scalar:
                 sample_num_to_evaluate = const_sample
             # Otherwise will take 3 samples each iteration
 
             # --- Retrain model ---
-            archive_descision_space = Population(evaluated_archive).get("X")
-            archive_objective_space = Population(evaluated_archive).get("F")
-            for i in range(n_objectives):
-                target_values = archive_objective_space[:, i] # all rows, objective i column
-                # Can pass in number of neighbors...also consider epsilon especially per objective
-                obj_model = RBFInterpolator(archive_descision_space, target_values, kernel='multiquadric', 
-                                            epsilon=rbf_epsilon, neighbors=neighbours)
-                rbf_models[i] = obj_model
+            if n_gen != generations-1:
+                archive_descision_space = Population(evaluated_archive).get("X")
+                archive_objective_space = Population(evaluated_archive).get("F")
+                for i in range(n_objectives):
+                    target_values = archive_objective_space[:, i] # all rows, objective i column
+                    # Can pass in number of neighbors...also consider epsilon especially per objective
+                    obj_model = RBFInterpolator(archive_descision_space, target_values, kernel='multiquadric', 
+                                                epsilon=rbf_epsilon, neighbors=neighbours)
+                    rbf_models[i] = obj_model
             # -----
 
         base_rbf.tell(infills=pop)
@@ -143,54 +130,3 @@ def RBF_NSGA2(problem, base_rbf, generations, err_scalar=None, const_sample=3, r
     return rbf_result_F, evaluations, err_plot
 
 
-
-
-if __name__ == "__main__":
-
-    POP_SIZE = 100
-    SBX_ETA = 15
-    SBX_PROB = 0.9
-    N_GEN = 50
-
-    problem = pymooProblem(RE31())
-
-    # Uses Latin Hyper Cube Sampling as in most papers
-    # SBX crossover (can modify probability of crossover etc) and polynomial mutation as in Yu M
-    nsga2_base = NSGA2(pop_size=POP_SIZE, 
-                    sampling=LHS(), 
-                    crossover=SBX(eta=SBX_ETA, prob=SBX_PROB), 
-                    mutation=PolynomialMutation(),
-                    survival=RankAndCrowding())
-
-    
-    rbf_nsga2_F, evals, err_plot = RBF_NSGA2(problem, nsga2_base, N_GEN, rand_seed=2, err_scalar=0.2)
-    print(evals)
-
-    # Run again but all with actual evaluations
-    control_algorithm = NSGA2(pop_size=POP_SIZE, 
-                    sampling=LHS(), 
-                    crossover=SBX(eta=SBX_ETA, prob=SBX_PROB), 
-                    mutation=PolynomialMutation(),
-                    survival=RankAndCrowding())
-
-
-    # n_gen is termination tuple, seed is seeding random value
-    control_res = minimize(problem,
-                control_algorithm,
-                ('n_gen', N_GEN),
-                seed=1,
-                verbose=False)
-
-
-    plot = Scatter()
-    # plot = Scatter()
-    # alpha makes transparent
-    plot.add(problem.pareto_front(), alpha=0.7, s=5)
-    # makes transparent
-    plot.add(control_res.F, facecolors='none', edgecolors='orange') 
-    plot.add(rbf_nsga2_F, color="green")   
-    plot.show()
-
-    plt.figure()
-    plt.plot(range(0, len(err_plot)), err_plot)
-    plt.show()
