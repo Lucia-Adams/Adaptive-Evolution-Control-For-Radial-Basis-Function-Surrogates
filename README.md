@@ -1,8 +1,7 @@
 # Adaptive Evolution Control For Radial Basis Function Surrogates
 For Multi-Objective Optimisation Problems with expensive fitness functions, surrogate models may be designed in order to reduce the evaluation cost of multi objective evolutionary algorithms. This code trains a Radial Basis Function surrogate and applies it to the NSGA-II
 algorithm. An adaptive surrogate training strategy is proposed and implemented,
-based on the incremental error observed between model predic-
-tions and true function evaluations, and I evaluated this on a suite of
+based on the incremental error observed between model predictions and true function evaluations, and I evaluated this on a suite of
 real-world problems.
 
 An accompanying short paper has been written, which is available upon request!
