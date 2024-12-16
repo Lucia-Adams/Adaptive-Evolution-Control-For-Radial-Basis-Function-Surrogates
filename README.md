@@ -9,9 +9,9 @@ An accompanying short paper has been written, which is available upon request!
 
 ## Requirements
 
-This project build upon the Pymoo library, which is required to run the project. (Pymoo Link)[https://pymoo.org]
+This project build upon the Pymoo library, which is required to run the project [Pymoo Link](https://pymoo.org).
 
-The tests used for evaluation are the ones discussed in [1], which can be found on the GitHub page linked here: (Test problem link)[https://github.com/ryojitanabe/reproblems].
+The tests used for evaluation are the ones discussed in [1], which can be found on the GitHub page linked here: [Test problem link](https://github.com/ryojitanabe/reproblems).
 The following files from the test problem repo are required for metric_experiments.py and problem_wrapper.py:
 
  - ``approximated_Pareto_fronts``
